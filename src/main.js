@@ -2,17 +2,17 @@ import Vue from 'vue'
 import App from './App.vue'
 import store from './store'
 import './styles/styles.css'
-import DifyPlugin from './plugins/dify-chat'
+import axios from 'axios'
+import { marked } from 'marked';
+import DOMPurify from 'dompurify'
 import FileUpload from './components/FileUpload.vue'
-import SSEComponent from './components/SSEComponent.vue'
 
 Vue.config.productionTip = false
-Vue.use(DifyPlugin)
+Vue.prototype.$http = axios
+Vue.prototype.$md = {
+  render: (text) => DOMPurify.sanitize(marked(text))
+}
 Vue.component('FileUpload', FileUpload)
-Vue.component('SSEComponent', SSEComponent)
-
-
-Vue.config.productionTip = false
 
 new Vue({
   store,

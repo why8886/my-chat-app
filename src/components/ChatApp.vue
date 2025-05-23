@@ -15,26 +15,33 @@
           <img class="icon" alt="小海" src="@/assets/huanyihuan.png">换一换
         </button>
         <ul class="questions-list">
-          <li v-for="(item, index) in currentList" :key="index" @click="setMessageAndSend(item.text)">{{ item.text }}</li>
+          <li v-for="(item, index) in currentList" :key="index" @click="inputText = item.text;sendMessage()">{{ item.text }}</li>
         </ul>
     </div>
     </div>
-
-    
     
     <div class="messages" ref="messagesContainer">
       <div v-for="(msg, index) in messages" :key="index" 
-           :class="['message', msg.sender === 'me' ? 'sent' : 'received']">
-
-        <div class="bubble">{{ msg.text }}<SSEComponent/></div>
+           :class="['message', msg.role === 'user' ? 'sent' : 'received']">
+        <!-- <div v-if="msg.files" class="file-preview">
+          <img v-if="isImage(msg.files[0])" :src="msg.files[0].url">
+          <a v-else :href="msg.files[0].url" target="_blank">下载文件</a>
+        </div> -->
+        <div v-if="loading && index == messages.length - 1" class="message-loading">
+          <div class="loading-dot"></div>
+          <div class="loading-dot"></div>
+          <div class="loading-dot"></div>
+        </div>
+        <div class="bubble" v-html="renderMarkdown(msg.content)"></div>
         <span class="time">{{ msg.time }}</span>
       </div>
     </div>
     
     <div class="input-area">
-      <input v-model="newMessage" @keyup.enter="sendMessage" placeholder="输入消息...">
+      <input v-model="inputText" @keyup.enter="sendMessage" placeholder="输入消息...">
       <button class="upload-button" @click.stop="toggleBox"><img class="icon-upload" src="@/assets/upload.png"></button>
       <div v-if="showBox" class="floating-box" ref="box">
+        <input type="file" @change="handleFileChange" ref="fileInput">
         <file-upload
           :acceptTypes="'application/*'"
           action="/files/upload"
@@ -57,142 +64,139 @@
   </div>
 </template>
 
-<script setup>
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import {getMessage} from '@/api/index'
+<script>
+import DifyService from '../api/difyService'
+import MarkdownIt from 'markdown-it'
+import DOMPurify from 'dompurify'
 
+export default {
+  data() {
+    return {
+      loading:false,
+      contactName:'智能招聘小海',
+      currentList:[],
+      showBox: false,
+      messages: [],
+      inputText: '',
+      currentFile: null,
+      conversationId: null,
+      md: new MarkdownIt(),
+      typingInterval: null
+    }
+  },
+  beforeUnmount(){
+    document.addEventListener('click', this.handleClickOutside)
+  },
+  mounted(){
+    this.refreshList()
+    this.scrollToBottom()
+    document.addEventListener('click', this.handleClickOutside)
+  },
+  methods: {
+    toggleBox(){
+      this.showBox = !this.showBox
+    },
+    refreshList(){
+      this.currentList=[
+        { text:'帮我推荐几个五年工作经验的JAVA后端开发?' },
+        { text:'帮我推荐几个三年工作经验的配置管理人员?' },
+        { text:'帮我推荐几个三年工作经验的需求设计人员?' },
+        { text:'帮我推荐几个有管理经验的技术经理人才?' },
+        { text:'帮我筛选下工作地点为南京的实施岗位人员?' },
+        { text:'帮我推荐几个精通VUE相关技术的前端开发?' },
+        { text:'哪些人才精通kubernetes等容器化相关技术?' },
+        { text:'帮我筛选下工作地点为河南的实施岗位人员?' },
+        { text:'帮我筛选下工作地点为福建的实施岗位人员?' },
+      ].sort(() => 0.5 - Math.random()).slice(0, 5)
+    },
+    scrollToBottom(){
+      this.$nextTick(() => {
+        const container = this.$refs.messagesContainer
+        container.scrollTop = container.scrollHeight
+      })
+    },
+    handleClickOutside(event){
+      if (this.$refs.box && !this.$refs.box.contains(event.target)) {
+        this.showBox = false
+      }
+    },
+    isImage(file) {
+      return file?.type?.startsWith('image/')
+    },
+    renderMarkdown(content) {
+      return DOMPurify.sanitize(this.md.render(content || ''))
+    },
+    handleFileChange(e) {
+      this.currentFile = e.target.files[0]
+    },
+    async sendMessage() {
+      if(!this.inputText || this.inputText.trim() === '') {
+        return alert('输入内容为空')
+      }
+      const userMsg = { 
+        role: 'user', 
+        content: this.inputText,
+        files: this.currentFile ? [{
+          name: this.currentFile.name,
+          type: this.currentFile.type,
+          url: URL.createObjectURL(this.currentFile)
+        }] : []
+      }
+      this.messages.push(userMsg)
 
-const contactName = ref('智能招聘小海')
-const newMessage = ref('')
-const messagesContainer = ref(null)
-const messages = ref([
-  // { text: '你好呀！', sender: 'other', time: '10:30' },
-  // { text: '最近怎么样？', sender: 'me', time: '10:32' }
-])
-const currentList = ref([])
+      const botMsg = { role: 'assistant', content: '' }
+      this.messages.push(botMsg)
+      this.loading = true
 
-const refreshList = () => {
-  currentList.value = [
-    { text:'帮我推荐几个五年工作经验的JAVA后端开发?' },
-    { text:'帮我推荐几个三年工作经验的配置管理人员?' },
-    { text:'帮我推荐几个三年工作经验的需求设计人员?' },
-    { text:'帮我推荐几个有管理经验的技术经理人才?' },
-    { text:'帮我筛选下工作地点为南京的实施岗位人员?' },
-    { text:'帮我推荐几个精通VUE相关技术的前端开发?' },
-    { text:'哪些人才精通kubernetes等容器化相关技术?' },
-    { text:'帮我筛选下工作地点为河南的实施岗位人员?' },
-    { text:'帮我筛选下工作地点为福建的实施岗位人员?' },
-  ].sort(() => 0.5 - Math.random()).slice(0, 5)
-}
-
-const showBox = ref(false)
-const box = ref(null)
-
-const toggleBox = () => {
-  showBox.value = !showBox.value
-}
-
-const handleClickOutside = (event) => {
-  if (box.value && !box.value.contains(event.target)) {
-    showBox.value = false
-  }
-}
-
-
-const sendMessage = () => {
-  if (newMessage.value.trim()) {
-    getMessage({
-      "response_mode":"streaming",
-      "conversation_id":"eab611f0-754c-4ddc-a0b2-2ef5248f8ba6",
-      "files":[{"type":"document","transfer_method":"local_file","url":"",
-      "upload_file_id":"dc8fee18-3545-4d65-aecd-92fe41b25c96"}],
-      "query": newMessage.value + '',
-      "inputs": {},
-      "parent_message_id":"3e7f027b-26e6-45ee-afaf-a4b2c302be02"
-    }).then(async (response) => {
-      const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-const isRunninhg = true;
-    while (isRunninhg) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value);
-      const events = chunk.trim().split('\n\n');
-
-      events.forEach(event => {
-        if (event.startsWith('data:')) {
-          const jsonStr = event.slice(5).trim();
-          try {
-            const data = JSON.parse(jsonStr);
-            processEvent(data); // 自定义事件处理器
-          } catch (e) {
-            console.error('JSON解析失败:', e);
+      try {
+        let fileId = null
+        if (this.currentFile) {
+          const uploadRes = await DifyService.uploadFile(this.currentFile)
+          fileId = uploadRes.data.id
+        }
+        
+        for await (const chunk of DifyService.streamChat({
+          query: this.inputText,
+          fileId,
+          conversationId: this.conversationId
+        })) {
+          if (chunk.event === 'message') {
+            botMsg.content += chunk.answer
+            this.scrollToBottom()
+            //this.typeResponse(botMsg, fullText)
+          } else if (chunk.event === 'message_end') {
+            this.conversationId = chunk.conversation_id
           }
         }
-      });
-    }
-    })
-    messages.value.push({
-      text: newMessage.value,
-      sender: 'me',
-      time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
-    })
-    newMessage.value = ''
-    scrollToBottom()
-    simulateReply()
+      } catch (error) {
+        botMsg.content = `错误: ${error.message}`
+      } finally {
+        this.loading = false
+      }
+
+      this.inputText = ''
+      this.currentFile = null
+      //this.$refs.fileInput.value = ''
+      
+    },
+    typeResponse(msgObj, fullText) {
+        clearInterval(this.typingInterval)
+        let content = ''
+        this.typingInterval = setInterval(() => {
+            if (content.length < fullText.length) {
+            content += fullText[content.length]
+            msgObj.content = content
+            this.$forceUpdate()
+            } else {
+            clearInterval(this.typingInterval)
+            }
+        }, 30)
+    },
+  },
+  beforeDestroy() {
+    clearInterval(this.typingInterval)
   }
 }
-const processEvent = (data) => {
-  switch (data.event) {
-    case 'workflow_started':
-      console.log('工作流启动:', data.data.workflow_id);
-      break;
-    case 'node_finished':
-      console.log(`节点完成[${data.data.node_type}]:`, data.data.status);
-      break;
-    // 其他事件类型...
-  }
-};
-const setMessageAndSend = (msg) => {
-  newMessage.value = msg
-  sendMessage()
-}
-
-const simulateReply = () => {
-  setTimeout(() => {
-    messages.value.push({
-      text: '该岗位要求3年以上前端开发经验',
-      sender: 'other',
-      time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
-    })
-    scrollToBottom()
-  }, 1500)
-}
-
-const scrollToBottom = () => {
-  nextTick(() => {
-    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
-  })
-}
-
-const handleUploadSuccess = (files) => {
-  alert(`成功上传 ${files.length} 个文件`)
-}
-const handleUploadError =  (error) => {
-  alert(`上传错误: ${error.message || error}`)
-}
-
-onMounted(() => {
-  refreshList()
-  scrollToBottom()
-  document.addEventListener('click', handleClickOutside)
-})
-
-onBeforeUnmount(() => {
-  document.removeEventListener('click', handleClickOutside)
-})
 </script>
-
 <style scoped>
 </style>

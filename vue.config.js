@@ -2,9 +2,9 @@ module.exports = {
   devServer: {
     proxy: {
       '/api': {
-        target: 'http://47.122.95.27/v1', // 后端实际地址
+        target: process.env.VUE_APP_DIFY_API_URL,
         changeOrigin: true,
-        pathRewrite: {'^/api': '/api'},
+        pathRewrite: {'^/api': ''},
         secure: false  // 如需忽略证书验证
       }
     }
